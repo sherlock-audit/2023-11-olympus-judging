@@ -158,6 +158,8 @@ def process_directory(repo, path):
     parent = None
     for index, file in enumerate(files):
         print(f"[-] Reading file {file.name}")
+        if file.name in ["017.md", "111.md", "186.md"]:
+            continue
         last_file = index == len(files) - 1
 
         file = ContentFileExtended.cast(file)

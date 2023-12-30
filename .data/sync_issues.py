@@ -340,8 +340,8 @@ def main():
 
     # Ensure issue IDs are sequential
     actual_issue_ids = list(issues.keys())
-    expected_issue_ids = list(range(1, max(actual_issue_ids) + 1))
-    missing_issue_ids = [x for x in expected_issue_ids if x not in actual_issue_ids and x not in [17, 111, 186]]
+    expected_issue_ids = [x for x in list(range(1, max(actual_issue_ids) + 1)) if x not in [17, 111, 186]]
+    missing_issue_ids = [x for x in expected_issue_ids if x not in actual_issue_ids]
     assert (
         actual_issue_ids == expected_issue_ids
     ), "Expected issues %s actual issues %s. Missing %s" % (

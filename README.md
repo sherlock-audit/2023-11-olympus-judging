@@ -3,7 +3,7 @@
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/55 
 
 ## Found by 
-dany.armstrong90, nirohgo
+dany.armstrong90, nirohgo, nobody2018
 ## Summary
 The moving average prices should be calculated by only oracle feed prices.
 But now, they are calculated by not only oracle feed prices but also moving average price recursively.
@@ -183,6 +183,18 @@ So, instead of using the `asset.useMovingAverage` state variable  in the `_getCu
 Then we should set `useMovingAverage = false` to call `_getCurrentPrice` function only in the `storePrice` function.
 In other cases, we should set `useMovingAverage = asset.useMovingAverage` to call `_getCurrentPrice` function.
 
+
+
+## Discussion
+
+**0xrusowsky**
+
+https://github.com/OlympusDAO/bophades/pull/257
+
+**IAm0x52**
+
+Fix looks good. The moving average is no longer included when storing price
+
 # Issue H-2: Incorrect ProtocolOwnedLiquidityOhm calculation due to inclusion of other user's reserves 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/172 
@@ -262,6 +274,14 @@ Guard the deposit function in BunniHub or compute the liquidity using shares bel
 **0xJem**
 
 This is a good catch, and the high level is justified
+
+**0xrusowsky**
+
+https://github.com/OlympusDAO/bophades/pull/260
+
+**IAm0x52**
+
+Fix looks good. OnlyOwner modifier has been added to deposits
 
 # Issue H-3: Incorrect StablePool BPT price calculation 
 
@@ -414,221 +434,17 @@ This is a valid issue and highlights problems with Balancer's documentation.
 
 We are likely to drop both the Balancer submodules from the final version, since we no longer have any Balancer pools used for POL and don't have any assets that require price resolution via Balancer pools.
 
-# Issue H-4: Incorrect price for tokens of Balancer stable pools due to fixed 1e18 input amount 
+**sherlock-admin2**
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/179 
+> Escalate
+> 
+> This is invalid. Never meant to interact with composable stable pools as shown by this comment here where they explicitly state it will revert if it is a composable stable pool:
+> 
+> https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L441-L444
 
-## Found by 
-hash
-## Summary
-Stable token rate is not considered for Balancer MetaStablePool tokens when computing the price
+    You've deleted an escalation for this issue.
 
-## Vulnerability Detail
-The amountIn is always provided as 1e18 for the `StableMath._calcOutGivenIn` function when calculating the price of stable pool token.
-
-```solidity
-    function getTokenPriceFromStablePool(
-        address lookupToken_,
-        uint8 outputDecimals_,
-        bytes calldata params_
-    ) external view returns (uint256) {
-
-        ......
-                try pool.getLastInvariant() returns (uint256, uint256 ampFactor) {
-                    // Upscale balances by the scaling factors
-                    uint256[] memory scalingFactors = pool.getScalingFactors();
-                    uint256 len = scalingFactors.length;
-                    for (uint256 i; i < len; ++i) {
-                        balances_[i] = FixedPoint.mulDown(balances_[i], scalingFactors[i]);
-                    }
-
-
-                    // Calculate the quantity of lookupTokens returned by swapping 1 destinationToken
-                    lookupTokensPerDestinationToken = StableMath._calcOutGivenIn(
-                        ampFactor,
-                        balances_,
-                        destinationTokenIndex,
-                        lookupTokenIndex,
-                        1e18,
-                        StableMath._calculateInvariant(ampFactor, balances_) // Sometimes the fetched invariant value does not work, so calculate it
-                    );
-        .......
-```
-
-The `lookupTokensPerDestinationToken` is used as-is without any further division with the inputted token amount as the input amount is assumed to be 1 unit.
-
-Although in normal stable pools 1 unit of token is upscaled to 1e18 for calculations, pools having rate proivders (MetaStablePool) upscale by also factoring in the token rate.
-
-```solidity
-    function _scalingFactors() internal view virtual override returns (uint256[] memory scalingFactors) {
-        
-        .......
-
-        scalingFactors = super._scalingFactors();
-        scalingFactors[0] = scalingFactors[0].mulDown(_priceRate(_token0));
-        scalingFactors[1] = scalingFactors[1].mulDown(_priceRate(_token1));
-    }
-```
-
-Hence the input token amount will deviate from 1 unit of token and will not return the price of the token.
-
-### Example Scenario
-In wstEth-cbEth pool wstEth has rate of 1.151313786310212348
-Actual input to the `calcAmountIn` should be 1.151313786310212348e18 and not 1e18. This will give an inflated price for cbEth.
-
-## Impact
-Incorrect token price calculation for MetaStablePool tokens in which lookup tokens have rates.
-
-## Code Snippet
-1e18 is used as input amount always
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L811-L827
-
-
-## Tool used
-Manual Review
-
-## Recommendation
-Input the upscaled amount instead of 1e18
-```solidity
-                    lookupTokensPerDestinationToken = StableMath._calcOutGivenIn(
-                        ampFactor,
-                        balances_,
-                        destinationTokenIndex,
-                        lookupTokenIndex,
-=>                      FixedPoint.mulDown(1e18,scalingFactors[destinationTokenIndex]),
-                        StableMath._calculateInvariant(ampFactor, balances_) // Sometimes the fetched invariant value does not work, so calculate it
-                    );
-```
-
-
-
-## Discussion
-
-**0xJem**
-
-Please provide links to the documentation/code to prove this:
-> Although in normal stable pools 1 unit of token is upscaled to 1e18 for calculations, pools having rate proivders (MetaStablePool) upscale by also factoring in the token rate.
-
-We are likely to drop both the Balancer submodules from the final version, since we no longer have any Balancer pools used for POL and don't have any assets that require price resolution via Balancer pools.
-
-**nevillehuang**
-
-Hi @0xJem here is additional information provided by the watson:
-
-I will give the etherscan link of a metastablepool
-
-https://vscode.blockscan.com/ethereum/0x1e19cf2d73a72ef1332c882f20534b6519be0276
-
-on searching _scalingFactors() it can be seen that the token balances are multiplied with priceRate apart from the normal scalingFactor (look for the scalingFacotrs in MetaStablePool.sol)
-
-for the swap flow, the general flow is onSwap -> _swapGivenIn() -> update balances with scaling factors -> _onSwapGivenIn() which actually does the StableMath._calcOutGivenIn calculation.
-While updating balances with scaling factors in _swapGivenIn() for metastable pools, 1 unit of token will be converted to 1 * normalScalingFactor * priceRate
-
-# Issue H-5: Incorrect deviation calculation in isDeviatingWithBpsCheck function 
-
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/193 
-
-## Found by 
-ast3ros, coffiasd, dany.armstrong90, evilakela, hash
-## Summary
-
-The current implementation of the `isDeviatingWithBpsCheck` function in the codebase leads to inaccurate deviation calculations, potentially allowing deviations beyond the specified limits.
-
-## Vulnerability Detail
-
-The function `isDeviatingWithBpsCheck` checks if the deviation between two values exceeds a defined threshold. This function incorrectly calculates the deviation, considering only the deviation from the larger value to the smaller one, instead of the deviation from the mean (or TWAP).
-
-        function isDeviatingWithBpsCheck(
-            uint256 value0_,
-            uint256 value1_,
-            uint256 deviationBps_,
-            uint256 deviationMax_
-        ) internal pure returns (bool) {
-            if (deviationBps_ > deviationMax_)
-                revert Deviation_InvalidDeviationBps(deviationBps_, deviationMax_);
-
-            return isDeviating(value0_, value1_, deviationBps_, deviationMax_);
-        }
-
-        function isDeviating(
-            uint256 value0_,
-            uint256 value1_,
-            uint256 deviationBps_,
-            uint256 deviationMax_
-        ) internal pure returns (bool) {
-            return
-                (value0_ < value1_)
-                    ? _isDeviating(value1_, value0_, deviationBps_, deviationMax_)
-                    : _isDeviating(value0_, value1_, deviationBps_, deviationMax_);
-        }
-
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L23-L52
-
-The function then call `_isDeviating` to calculate how much the smaller value is deviated from the bigger value.
-
-        function _isDeviating(
-            uint256 value0_,
-            uint256 value1_,
-            uint256 deviationBps_,
-            uint256 deviationMax_
-        ) internal pure returns (bool) {
-            return ((value0_ - value1_) * deviationMax_) / value0_ > deviationBps_;
-        }
-
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L63-L70
-
-The function `isDeviatingWithBpsCheck` is usually used to check how much the current value is deviated from the TWAP value to make sure that the value is not manipulated. Such as spot price and twap price in UniswapV3.
-
-        if (
-            // `isDeviatingWithBpsCheck()` will revert if `deviationBps` is invalid.
-            Deviation.isDeviatingWithBpsCheck(
-                baseInQuotePrice,
-                baseInQuoteTWAP,
-                params.maxDeviationBps,
-                DEVIATION_BASE
-            )
-        ) {
-            revert UniswapV3_PriceMismatch(address(params.pool), baseInQuoteTWAP, baseInQuotePrice);
-        }
-
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/PRICE/submodules/feeds/UniswapV3Price.sol#L225-L235
-
-The issue is isDeviatingWithBpsCheck is not check the deviation of current value to the TWAP but deviation from the bigger value to the smaller value. This leads to an incorrect allowance range for the price, permitting deviations that exceed the acceptable threshold.
-
-Example:
-
-TWAP price: 1000
-Allow deviation: 10%.
-
-The correct deviation calculation will use deviation from the mean. The allow price will be from 900 to 1100 since:
-
--   |1100 - 1000| / 1000 = 10%
--   |900 - 1000| / 1000 = 10%
-
-However the current calculation will allow the price from 900 to 1111
-
--   (1111 - 1000) / 1111 = 10%
--   (1000 - 900) / 1000 = 10%
-
-Even though the actual deviation of 1111 to 1000 is |1111 - 1000| / 1000 = 11.11% > 10%
-
-## Impact
-
-This miscalculation allows for greater deviations than intended, increasing the vulnerability to price manipulation and inaccuracies in Oracle price reporting.
-
-## Code Snippet
-
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L63-L70
-
-## Tool used
-
-Manual review
-
-## Recommendation
-
-To accurately measure deviation, the isDeviating function should be revised to calculate the deviation based on the mean value: `| spot value - twap value | / twap value`.
-
-# Issue H-6: getBunniTokenPrice wrongly returns the total price of all tokens 
+# Issue H-4: getBunniTokenPrice wrongly returns the total price of all tokens 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/198 
 
@@ -659,6 +475,18 @@ Manual Review
 ## Recommendation
 
 Devide totalValue by the total tokens supply. 
+
+
+
+## Discussion
+
+**0xrusowsky**
+
+https://github.com/OlympusDAO/bophades/pull/244  
+
+**IAm0x52**
+
+Fix looks good. Token price is now normalized to get price per token.
 
 # Issue M-1: BunniPrice.getBunniTokenPrice doesn't include fees 
 
@@ -728,324 +556,69 @@ Does the following mean uncollected fees are going to be collected by olympus re
 Yes we will have a keeper function calling the harvest() function on BunniManager. It can be called maximum once in 24 hours.
 
 
-# Issue M-2: UniswapV3OracleHelper.getTWAPRatio will show incorrect price for negative ticks 
+**0xrusowsky**
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/38 
+https://github.com/OlympusDAO/bophades/pull/244
 
-## Found by 
-rvierdiiev
-## Summary
-UniswapV3OracleHelper.getTWAPRatio will show incorrect price for negative ticks, because getTimeWeightedTick function doesn't round up for negative ticks
-## Vulnerability Detail
-`UniswapV3OracleHelper.getTWAPRatio` function is used by protocol [to validate price deviation in the `BunniPrice`](https://github.com/sherlock-audit/2023-11-olympus-rvierdiyev/blob/main/bophades/src/modules/PRICE/submodules/feeds/BunniPrice.sol#L249-L252) and also [by `UniswapV3Price.getTokenTWAP` function](https://github.com/sherlock-audit/2023-11-olympus-rvierdiyev/blob/main/bophades/src/modules/PRICE/submodules/feeds/UniswapV3Price.sol#L154-L160).
+**IAm0x52**
 
-Function itself calls [`getTimeWeightedTick` function](https://github.com/sherlock-audit/2023-11-olympus-rvierdiyev/blob/main/bophades/src/libraries/UniswapV3/Oracle.sol#L147) to get twap price tick using uniswap oracle. `getTimeWeightedTick` [uses `pool.observe` to get `tickCumulatives` array](https://github.com/sherlock-audit/2023-11-olympus-rvierdiyev/blob/main/bophades/src/libraries/UniswapV3/Oracle.sol#L85C28-L85C43) which is then used to calculate `timeWeightedTick`. 
+Escalate
 
-The problem is that in case if `tickCumulatives[1] - tickCumulatives[0]` is negative, then `timeWeightedTick` should be rounded down [as it's done in the uniswap library](https://github.com/Uniswap/v3-periphery/blob/main/contracts/libraries/OracleLibrary.sol#L36).
+This is simply another occurrence of #49 in a different location and should be grouped with it
 
-As result, in case if `tickCumulatives[1] - tickCumulatives[0]` is negative and `(tickCumulatives[1] - tickCumulatives[0]) % secondsAgo != 0`, then returned `timeWeightedTick` will be bigger then it should be, which opens possibility for some price manipulations and arbitrage opportunities.
-## Impact
-In case if `tickCumulatives[1] - tickCumulatives[0]` is negative and `((tickCumulatives[1] - tickCumulatives[0]) % secondsAgo != 0`, then returned `timeWeightedTick` will be bigger then it should be.
-## Code Snippet
-Provided above
-## Tool used
+**sherlock-admin2**
 
-Manual Review
+ > Escalate
+> 
+> This is simply another occurrence of #49 in a different location and should be grouped with it
 
-## Recommendation
-Add this line.
-`if (tickCumulatives[1] - tickCumulatives[0] < 0 && (tickCumulatives[1] - tickCumulatives[0]) % secondsAgo != 0) timeWeightedTick --;`
+You've created a valid escalation!
 
+To remove the escalation from consideration: Delete your comment.
 
-
-## Discussion
-
-**0xJem**
-
-Disagree with the severity. Should be low, as it would be a minor difference in the value.
+You may delete or edit your escalation comment anytime before the 48-hour escalation window closes. After that, the escalation becomes final.
 
 **nevillehuang**
 
-Hi @0xJem, Could you elaborate more on how minor is this difference? Since this can directly impact price, I think this could at least be medium severity.
+Agree with @IAm0x52 , root cause is the same although with different impact, can be duplicated.
+
+**Arabadzhiew**
+
+This issue and its duplicates refer to an issue in the `BunniPrice` contract, while issue #49 and its duplicates refer to an issue that is inside of the `BunniSupply` contract. The root causes are clearly not the same, so I believe those two issues should stay separated in 2 different families.
 
 **0xJem**
 
-> Hi @0xJem, Could you elaborate more on how minor is this difference? Since this can directly impact price, I think this could at least be medium severity.
+IMO it is separate. 49 refers to the TWAP and reserves check, whereas this is valuing the LP position.
 
-1 tick is 1 basis point from the next tick:
-> Prices from 0 to ∞ can be expressed in sharp enough granularity using a large-enough (int24) signed integer power of 1.0001, called a tick, such that each tick’s price is exactly .01% (1 basis point) away from its neighbor.
+**IAm0x52**
 
-https://ryanjameskim.medium.com/uniswap-v3-part-2-ticks-and-fee-acounting-explainer-with-toy-example-e9bf4d706884
+Fix looks good. Fees are now also accounted for here as well.
+
+**Czar102**
+
+@IAm0x52 could you take another look and let me know if you agree with the above comments?
 
 **nevillehuang**
 
-> > Hi @0xJem, Could you elaborate more on how minor is this difference? Since this can directly impact price, I think this could at least be medium severity.
-> 
-> 1 tick is 1 basis point from the next tick:
-> 
-> > Prices from 0 to ∞ can be expressed in sharp enough granularity using a large-enough (int24) signed integer power of 1.0001, called a tick, such that each tick’s price is exactly .01% (1 basis point) away from its neighbor.
-> 
-> https://ryanjameskim.medium.com/uniswap-v3-part-2-ticks-and-fee-acounting-explainer-with-toy-example-e9bf4d706884
+@Czar102 I think there was a separate fix with the 246 pull request for issue #49, so could indicate that they are not duplicates
 
-Might maintain medium severity given although you need huge amount of funds to gain small profits, it is still profits so it would fall under this sherlock [rule for medium severity](https://docs.sherlock.xyz/audits/judging/judging#v.-how-to-identify-a-medium-issue)
+**Czar102**
 
+Result:
+Medium
+Has duplicates
 
-> 3. A material loss of funds, no/minimal profit for the attacker at a considerable cost
+Escalation's author hasn't provided enough information to justify a change in status of the issue.
 
-# Issue M-3: Allowing inconsistent time slices, the moving average can misrepresent the mean price 
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/39 
+**sherlock-admin2**
 
-## Found by 
-coffiasd, squeaky\_cactus
-## Summary
-On creation `OlympusPricev2` is provided an `observationFrequency`, the expected frequency at which prices are stored for moving average (MA).
+Escalations have been resolved successfully!
 
-`OlympusPricev2.storePrice()` calculates the latest asset price and updates the moving average, but lacks any logic to ensure the timeliness of updates, or consistency in the time between updates.
+Escalation status:
+- [IAm0x52](https://github.com/sherlock-audit/2023-11-olympus-judging/issues/37/#issuecomment-1885236375): rejected
 
-The MA in `OlympusPricev2` is a simple moving average (SMA), where the points of time-series data taken for the SMA can have inconsistent time spacing,  meaning the SMA will contain a degree of error in the following of the line graph of all the points, due to even weighting of points irrespective of intervals.
-(The average produced may not be accurately following movements in the underlying data).
-
-
-## Vulnerability Detail
-The expectation of how much time will be between moving average updates if given as `observationFrequency_` in the [OlympusPricev2 constructor](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L26-L27)
-```solidity
-    /// @param observationFrequency_    Frequency at which prices are stored for moving average
-    constructor(Kernel kernel_, uint8 decimals_, uint32 observationFrequency_) Module(kernel_) {
-```
-
-### Updating the MA
-When the update of the MA happens, there are no guards or checks enforcing the `currentTime` is `observationFrequency` away from the `lastObservationTime` in [OlympusPricev2.storePrice](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L312-L335)
-```solidity
-    function storePrice(address asset_) public override permissioned {
-    Asset storage asset = _assetData[asset_];
-
-    // Check if asset is approved
-    if (!asset.approved) revert PRICE_AssetNotApproved(asset_);
-
-    // Get the current price for the asset
-    (uint256 price, uint48 currentTime) = _getCurrentPrice(asset_);
-
-    // Store the data in the obs index
-    uint256 oldestPrice = asset.obs[asset.nextObsIndex];
-    asset.obs[asset.nextObsIndex] = price;
-
-    // Update the last observation time and increment the next index
-    asset.lastObservationTime = currentTime;
-    asset.nextObsIndex = (asset.nextObsIndex + 1) % asset.numObservations;
-
-    // Update the cumulative observation, if storing the moving average
-    if (asset.storeMovingAverage)
-        asset.cumulativeObs = asset.cumulativeObs + price - oldestPrice;
-
-    // Emit event
-    emit PriceStored(asset_, price, currentTime);
-}
-```
-The `currentTime` is a return value, but that is simply returning the current `block.timestamp` in [__getCurrentPrice](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L182-L182)
-```solidity
-            return (price, uint48(block.timestamp));
-```
-With `storePrice` having no restriction on how short or long after the `currentTime` could be away from the `lastObservationTime`, the time between the data points in the SMA are not guaranteed to be consistent.
-
-When the MA is calculated, each data point is given equal weighting by [OlympusPricev2._getMovingAveragePrice]()
-```solidity
-        // Calculate moving average
-        uint256 movingAverage = asset.cumulativeObs / asset.numObservations;
-```
-
-Providing an equal weighting to each value, irrespective of the time interval between them, introduces the potential for distortion in the MA.
-
-As `OlympusPricev2.storePrice()` exists as a part of a larger system, lets looks how further into upstream interactions.
-
-
-#### Heartbeat
-The call to `OlympusPricev2.storePrice()` occurs in the RBS Policy `Heart.beat()` (out of scope for the audit, but included to provide context), that itself is called by an incentivized keeper, with a target interval of 8 hours.
-
-```solidity
-    function beat() external nonReentrant {
-        if (!active) revert Heart_BeatStopped();
-        uint48 currentTime = uint48(block.timestamp);
-        if (currentTime < lastBeat + frequency()) revert Heart_OutOfCycle();
-
-        // Update the OHM/RESERVE moving average by store each of their prices on the PRICE module
-        PRICE.storePrice(address(operator.ohm()));
-        PRICE.storePrice(address(operator.reserve()));
-```
-`(currentTime < lastBeat + frequency())` checks that at least `observationFrequency` time has passed since the last `beat`.
-`OlympusPricev2.storePrice()` will not be called at intervals of less than observationFrequency`, but there is nothing preventing longer time intervals.
-
-#### Incentivized keeper
-An external actor who performs operations usually driven by financial incentives, where timeliness of actions rely on the incentives providing a return on performing the action.
-Incentivizes are subject to free market conditions, for `Heart.beat()` the variables being the valuation of the incentives and the cost of gas.
-
-
-### The effect of time intervals
-When selecting data points from a time-series data set and no accounting for different time intervals between them is made, there can be unintended effects.
-
-For a quick example to shows a small average during a change from a time of sidewards moving price into a strong upward trending price, lets assume the following properties:
-- SMA is initialized flat (all points are equal, the starting price)
-- SMA of 5 data points
-- Starting price is one full unit of the asset
-- Price has linear increase of 10% every 24 hours
-- The test will run for 5 updates to the SMA
-
-Two tests, each with two 10 hour intervals and three 8 hour intervals, the different being one has the longer intervals in the beginning, the other at the end.
-
-A quick test logging the MA after each update produces these results:
-```text
-[PASS] test_linear_price_ma_closer_early_points() (gas: 793044)
-Logs:
-  10066666666000000000
-  10199999998000000000
-  10399999998000000000
-  10683333330000000000
-  11049999996000000000
-
-[PASS] test_linear_price_ma_closer_later_points() (gas: 792999)
-Logs:
-  10083333332000000000
-  10249999998000000000
-  10483333330000000000
-  10783333330000000000
-  11149999996000000000
-```
-With a result that is likely to surprise nobody, the test with the two 10 hours intervals at the beginning score a larger MA (~0.9% larger MA, over an underlying price increase of ~18%).
-
-Irregular time intervals can have a real impact during a strong, consistent trend.
-
-
-#### Proof of Concept - Sample Data
-To generate the sample data, add the below Solidity to `PRICE.v2.t.sol` and run `forge test --match-test test_linear_price_ma -vv`
-
-```solidity
-    uint private constant START_PRICE = 10e8;       // Alpha USD feed is 8 decimals
-    uint private constant PARSED_PRICE = 10e18;     // Oracle after parsed by Olympus code is 18 decimals
-
-    /// MA with longer time between the two earliest data points
-    function test_linear_price_ma_closer_later_points() external {
-        _addAlphaSingleFeedStoreMA();
-        uint startTime = block.timestamp;
-        uint80 roundId = 1;
-
-        storeLinearPriceIncrease( startTime, startTime + 10 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 20 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 28 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 36 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 44 hours, roundId++);
-    }
-
-    /// MA with longer time between the two latest data points
-    function test_linear_price_ma_closer_early_points() external {
-        _addAlphaSingleFeedStoreMA();
-        uint startTime = block.timestamp;
-        uint80 roundId = 1;
-
-        storeLinearPriceIncrease( startTime, startTime + 8 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 16 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 24 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 34 hours, roundId++);
-        storeLinearPriceIncrease( startTime, startTime + 44 hours, roundId++);
-    }
-
-    /// Linear increase of price by 10% every 24 hours
-    function storeLinearPriceIncrease( uint startTime, uint timeNow, uint80 roundId) private {
-        vm.warp(timeNow);
-
-        uint tenPercentBPS = 1_000;
-        uint oneHundredPercentBPS = 10_000;
-        uint timePassed = timeNow-startTime;
-        uint priceIncrease = (START_PRICE * timePassed * tenPercentBPS) / (24 hours * oneHundredPercentBPS);
-        uint priceNow = START_PRICE + priceIncrease;
-
-        alphaUsdPriceFeed.setRoundId(roundId);
-        alphaUsdPriceFeed.setAnsweredInRound(roundId);
-        alphaUsdPriceFeed.setTimestamp(timeNow);
-        alphaUsdPriceFeed.setLatestAnswer(int(priceNow));
-
-        vm.prank(writer);
-        price.storePrice(address(alpha));
-
-        log_ma();
-    }
-
-    function log_ma() private {
-        (uint256 ma,) = price.getPrice(address(alpha), PRICEv2.Variant.MOVINGAVERAGE);
-        emit log_uint(ma);
-    }
-
-    // Add the Alpha with a single feed and moving average stored, but not used in price calculations
-    function _addAlphaSingleFeedStoreMA() private {
-        ChainlinkPriceFeeds.OneFeedParams memory alphaParams = ChainlinkPriceFeeds.OneFeedParams(alphaUsdPriceFeed, uint48(24 hours));
-        PRICEv2.Component[] memory feeds = new PRICEv2.Component[](1);
-        feeds[0] = PRICEv2.Component(toSubKeycode("PRICE.CHAINLINK"), ChainlinkPriceFeeds.getOneFeedPrice.selector, abi.encode(alphaParams));
-        vm.prank(writer);
-        price.addAsset(address(alpha), true, false, uint32(40 hours), uint48(block.timestamp), _makeStaticObservations(uint256(5)), PRICEv2.Component(toSubKeycode(bytes20(0)), bytes4(0), abi.encode(0)), feeds);
-    }
-
-    function _makeStaticObservations(uint observationCount) private returns (uint256[] memory){
-        uint[] memory observations = new uint[](observationCount);
-        for (uint i = observationCount; i > 0; --i) {
-            observations[i - 1] = PARSED_PRICE;
-        }
-        return observations;
-    }
-```
-
-## Impact
-These three areas impacted by an inaccurate MA: price retrieval, MA timespan and MA retrieval.
-
-### Price retrieval
-The MA can be included in the current price calculation by the strategies in [SimplePriceFeedStrategy](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/strategies/SimplePriceFeedStrategy.sol#L123), 
-with the degree of impact varying by strategy and whether the feeds are live (e.g. Tests have [OHM and RSV with multiple feeds](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/test/modules/PRICE.v2/PRICE.v2.t.sol#L151-L152)), 
-which seriously reduce the likelihood of every encountering them i.e. as multiple simultaneous feed failures are required for the MA to constitute the price or a large component of it. 
-
-### Moving average timespan
-When adding an asset the param `movingAverageDuration_` is used in combination with `observationFrequency` to calculate the number of data points to use in the SMA.
-Due to the incentivized keeper update mechanism, the time between observations is likely to differ from `observationFrequency`, where the timespan of the entire MA could be materially different to the duration given when adding the asset.
-If the timespan was chosen due to risk modelling (rather than an implicit calculation for the number of SMA points), this would be unfortunate, as the models would not be match the actual behaviour. 
-
-### Moving average retrieval
-The more impactful use of the `OlympusPricev2` MA is with the RBS policy, accessed in [Operator.targetPrice()](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/policies/RBS/Operator.sol#L856) as part of updating the target price for the `RANGE` module.
-[Range Bound Stability](https://docs.olympusdao.finance/main/overview/range-bound) being the mechanism that stabilizes the price of OHM, by using the MA as the anchor point to decide upper and lower bounds, and consequent actions to stabilize the OHM price. 
-
-An inaccurate MA would lead to an incorrect target price, then the wrong amount of corrective action when attempting the price stabilization would follow, ultimately costing the protocol (by selling less OHM during up-trends, deploying less of the Treasury during down-trends, while aso providing less stability to OHM then intended). 
- 
-
-
-## Code Snippet
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L312-L335
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L160-L160
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L227-L227
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L696-L705
-
-
-## Tool used
-Manual Review, Forge test
-
-
-## Recommendation
-There are two parts, the price weighting and timespan drift.
-
-### Price weighting
-Switching from a SMA to a time-weight average price (TWAP).
-
-### Timespan drift
-Keeping with the idea of a protocol that does require manual intervention, a feedback loop to trigger amending the incentives for calling `Heat.beat()`,
-that would be the nice approach of steering the timespan of the moving average to move towards the expected `movingAverageDuration_`.
-It could either be included as part of the heartbeat or a separate monitor.
-
-
-
-## Discussion
-
-**0xJem**
-
-Acknowledgement of the issue. However, disagree with the severity. `storePrice` is permissioned, so only a policy installed by the owner, the DAO MS, can call it, and the policy can only be called by a whitelisted address.
-
-Low-medium severity
-
-# Issue M-4: Inconsistency in BunniToken Price Calculation 
+# Issue M-2: Inconsistency in BunniToken Price Calculation 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/49 
 
@@ -1256,7 +829,16 @@ Accurate that uncollected fees are excluded from the TWAP check but included in 
 
 We are aware, hence the reserves & TWAP check, plus re-entrancy check.
 
-# Issue M-5: Price can be miscalculated. 
+**0xrusowsky**
+
+https://github.com/OlympusDAO/bophades/pull/244
+https://github.com/OlympusDAO/bophades/pull/246
+
+**IAm0x52**
+
+Fix looks good. Fees are now included in determining bunni token price. Fees are now not considered in BunniHelper#getFullRangeBunniKey
+
+# Issue M-3: Price can be miscalculated. 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/56 
 
@@ -1416,125 +998,314 @@ Second, `SimplePriceFeedStrategy.sol#getMedianPrice` has to be modified as follo
 
 Agree with the highlighted issue, disagree with the proposed solution.
 
-# Issue M-6: The calculation of current price of asset can be wrong. 
+**0xJem**
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/57 
+https://github.com/OlympusDAO/bophades/pull/282
+
+**IAm0x52**
+
+Fix looks good. Now falls back to getAveragePriceIfDeviation() instead of returning first.
+
+# Issue M-4: Price calculation can be manipulated by intentionally reverting some of price feeds. 
+
+Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/127 
 
 ## Found by 
-dany.armstrong90, nobody2018
+KupiaSec
 ## Summary
-In `OlympusPrice.v2.sol#_getCurrentPrice` function, when `useMovingAverage == true` it uses `movingAveragePrice` for calculation of the current price.
-Here, unlike prices from `feeds`, `movingAveragePrice` was determined before, possibly long before.
-When `movingAveragePrice` is determined long before the current time, it can be much different from real price. Then, it can confuse the strategy so it can cause wrong calculation of the current price.
+Price calculation module iterates through available price feeds for the requested asset, gather prices of non-revert price feeds and then apply strategy on available prices to calculate final asset price.
+By abusing this functionality, an attacker can let some price feeds revert to get advantage from any manipulated price feed.
 
 ## Vulnerability Detail
-`OlympusPrice.v2.sol#_getCurrentPrice` function is as follows.
-```solidity
-    function _getCurrentPrice(address asset_) internal view returns (uint256, uint48) {
-        Asset storage asset = _assetData[asset_];
+Here we have some methods that attackers can abuse to intentionally revert price feeds.
+1. UniswapV3 price feed
+[UniswapV3Price.sol#L210-214](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/UniswapV3Price.sol#L210-L214)
+```Solidity
+// Get the current price of the lookup token in terms of the quote token
+(, int24 currentTick, , , , , bool unlocked) = params.pool.slot0();
 
-        // Iterate through feeds to get prices to aggregate with strategy
-        Component[] memory feeds = abi.decode(asset.feeds, (Component[]));
-        uint256 numFeeds = feeds.length;
-        uint256[] memory prices = asset.useMovingAverage
-            ? new uint256[](numFeeds + 1)
-            : new uint256[](numFeeds);
-        uint8 _decimals = decimals; // cache in memory to save gas
-        for (uint256 i; i < numFeeds; ) {
-            (bool success_, bytes memory data_) = address(_getSubmoduleIfInstalled(feeds[i].target))
-                .staticcall(
-                    abi.encodeWithSelector(feeds[i].selector, asset_, _decimals, feeds[i].params)
-                );
-
-            // Store price if successful, otherwise leave as zero
-            // Idea is that if you have several price calls and just
-            // one fails, it'll DOS the contract with this revert.
-            // We handle faulty feeds in the strategy contract.
-152         if (success_) prices[i] = abi.decode(data_, (uint256));
-
-            unchecked {
-                ++i;
-            }
-        }
-
-        // If moving average is used in strategy, add to end of prices array
-160     if (asset.useMovingAverage) prices[numFeeds] = asset.cumulativeObs / asset.numObservations;
-
-        // If there is only one price, ensure it is not zero and return
-        // Otherwise, send to strategy to aggregate
-        if (prices.length == 1) {
-            if (prices[0] == 0) revert PRICE_PriceZero(asset_);
-            return (prices[0], uint48(block.timestamp));
-        } else {
-            // Get price from strategy
-            Component memory strategy = abi.decode(asset.strategy, (Component));
-170         (bool success, bytes memory data) = address(_getSubmoduleIfInstalled(strategy.target))
-                .staticcall(abi.encodeWithSelector(strategy.selector, prices, strategy.params));
-
-            // Ensure call was successful
-            if (!success) revert PRICE_StrategyFailed(asset_, data);
-
-            // Decode asset price
-            uint256 price = abi.decode(data, (uint256));
-
-            // Ensure value is not zero
-            if (price == 0) revert PRICE_PriceZero(asset_);
-
-            return (price, uint48(block.timestamp));
-        }
-    }
+// Check for re-entrancy
+if (unlocked == false) revert UniswapV3_PoolReentrancy(address(params.pool));
 ```
-As we can see above, `L152` gets price from `feed` and on L160 when `asset.useMovingAverage == true` it sets `movingAveragePrice`.
-And then on `L170` it calculates the current price through `strategy`.
-But `movingAveragePrice` is calculated from previously stored values, so it can be much different from real price.
-It means that this wrong value can confuse strategy and cause wrong calculation of the current price.
-i.e. `SimplePriceFeedStrategy.sol#getAveragePrice` calculates the average as the price and much different value from real one can cause wrong calculation.
+In UniswapV3 price feed, it reverts if current state is re-entered.
+An attacker can intentionally revert this price feed by calling it from UniswapV3's callback methods.
+
+2. Balancer price feed
+[BalancerPoolTokenPrice.sol#L388](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L388)
+[BalancerPoolTokenPrice.sol#487](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L487)
+[BalancerPoolTokenPrice.sol#599](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L599)
+[BalancerPoolTokenPrice.sol#748](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L748)
+```Solidity
+// Prevent re-entrancy attacks
+VaultReentrancyLib.ensureNotInVaultContext(balVault);
+```
+In BalancerPool price feed, it reverts if current state is re-entered.
+An attacker can intentionally revert this price feed by calling it in the middle of Balancer action.
+
+3. BunniToken price feed
+[BunniPirce.sol#L155-160](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BunniPrice.sol#L155-L160)
+```Solidity
+_validateReserves(
+    _getBunniKey(token),
+    lens,
+    params.twapMaxDeviationsBps,
+    params.twapObservationWindow
+);
+```
+In BunniToken price feed, it validates reserves and reverts if it doesn't satisfy deviation.
+Since BunniToken uses UniswapV3, this can be intentionally reverted by calling it from UniswapV3's mint callback.
+
+---
+Usually for ERC20 token prices, above 3 price feeds are commonly used combined with Chainlink price feed, and optionally with `averageMovingPrice`.
+There are another two points to consider here:
+1. When average moving price is used, it is appended at the end of the price array.
+[OlympusPrice.v2.sol#L160](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L160)
+```Solidity
+if (asset.useMovingAverage) prices[numFeeds] = asset.cumulativeObs / asset.numObservations;
+```
+2. In price calculation strategy, first non-zero price is used when there are 2 valid prices:
+`getMedianPriceIfDeviation` - [SimplePriceFeedStrategy.sol#L246](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/strategies/SimplePriceFeedStrategy.sol#L246)
+`getMedianPrice` - [SimplePriceFeedStrategy.sol#L313](https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/strategies/SimplePriceFeedStrategy.sol#L313)
+For `getAveragePrice` and `getAveragePriceIfDeviation`, it uses average price if it deviates.
+
+---
+Based on the information above, here are potential attack vectors that attackers would try:
+1. When Chainlink price feed is manipulated, an attacker can disable all three above price feeds intentionally to get advantage of the price manipulation.
+2. When Chainlink price feed is not used for an asset, an attacker can manipulate one of above 3 spot price feeds and disable other ones.
+
+When `averageMovingPrice` is used and average price strategy is applied, the manipulation effect becomes half:
+$\frac{(P + \Delta X) + (P)}{2} = P + \frac{\Delta X}{2}, P=Market Price, \Delta X=Manipulated Amount$
 
 ## Impact
-When `movingAveragePrice` is much different from real price, it can confuse strategy and cause wrong calculation of the current price.
+Attackers can disable some of price feeds as they want with ease, they can get advantage of one manipulated price feed.
 
 ## Code Snippet
-https://github.com/sherlock-audit/2023-11-olympus-web3-master/blob/main/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L160
+https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/OlympusPrice.v2.sol#L132-L184
 
 ## Tool used
-
 Manual Review
 
 ## Recommendation
-`OlympusPrice.v2.sol#_getCurrentPrice` has to be rewritten as follows.
-```solidity
-    function _getCurrentPrice(address asset_) internal view returns (uint256, uint48) {
-        Asset storage asset = _assetData[asset_];
-
-        ...
-
-        // If moving average is used in strategy, add to end of prices array
--       if (asset.useMovingAverage) prices[numFeeds] = asset.cumulativeObs / asset.numObservations;
-+       if (asset.useMovingAverage) {
-+           if(block.timestamp - asset.lastObservationTime > MAX_MOVING_AVERAGE_DELAY){
-+               revert(...);
-+           }
-+           prices[numFeeds] = asset.cumulativeObs / asset.numObservations;
-+       }
-
-        ...
-    }
-```
-Here, `MAX_MOVING_AVERAGE_DELAY` is a `threshold` which the system set.
+For the cases above that price feeds being intentionally reverted, the price calculation itself also should revert without just ignoring it.
 
 
 
 ## Discussion
 
+**nevillehuang**
+
+Invalid, if a user purposely revert price feeds, they are only affecting their own usage, not the usage of price feeds for other users transactions.
+
+**KupiaSecAdmin**
+
+Escalate
+
+Hey @nevillehuang - Yes, exactly you are right. What an attacker can manipulate is a spot price using flashloans, so if an attacker purposely disable other price feeds but only leave manipulated price feed, there happens a vulnerability that an attacker can buy tokens at affected price.
+
+**sherlock-admin2**
+
+ > Escalate
+> 
+> Hey @nevillehuang - Yes, exactly you are right. What an attacker can manipulate is a spot price using flashloans, so if an attacker purposely disable other price feeds but only leave manipulated price feed, there happens a vulnerability that an attacker can buy tokens at affected price.
+
+You've created a valid escalation!
+
+To remove the escalation from consideration: Delete your comment.
+
+You may delete or edit your escalation comment anytime before the 48-hour escalation window closes. After that, the escalation becomes final.
+
+**nevillehuang**
+
+@KupiaSecAdmin, All of your scenarios are invalid
+
+1. There is no point for somebody to reenter to explicity cause a revert for using the price feed himself
+2. Same reason as 1.
+3. There is no point for somebody to cause a deviation to explicity cause a revert for using the price feed himself
+4. A user cannot manipulate a chainlink price feed since there are no reserves
+
+This is on top of the fact that price submodules are not intended to be called directly, but via the primary price module mentioned in this [comment here](https://github.com/sherlock-audit/2023-11-olympus-judging/issues/96#issuecomment-1878273812)
+
+**KupiaSecAdmin**
+
+@nevillehuang - For example, you can manipulate spot price of Uniswap. To make this work, you need to make other price feeds revert because if they are all enabled, average/median price strategy will be taken and manipulated spot price will not take effect.
+
+**nevillehuang**
+
+@KupiaSecAdmin you cannot make other feeds revert for other user, only yourself, and your submission certainly doesn't prove that it is possible. Besides, to manipulate spot price in uniswap, you will have to manipulate the reserves, which is a known issue in the contest and out of scope.
+
+**KupiaSecAdmin**
+
+@nevillehuang - I would like to add some notes and scenarios below that I think might be attack vectors.
+@0xJem - I would be happy to get some feedbacks from the protocol team regarding the issue.
+
+[Notes]
+1. (I believe) This price module will be used in other parts of Olympus protocol to determine fair price of OHM(and other ERC20 tokens) at any time by integrating multiple price feeds and applying a strategy(average or median) to different prices to carry out final fair price.
+2. The carried out final price will be used to buy/sell OHM tokens using other collaterals in other modules of Olympus protocol.
+
+[Scenario]
+1. Let's assume that an attacker can manipulate a spot price of one price feed, e.g. Uni2, Uni3, Bunni. It can not be guaranteed that all spot price feeds work correctly.
+2. As a result, we can assume that the attacker can manipulate OHM price of one price feed to $9(for example by manipulating Bunni).
+3. However, multiple price feeds are used to calculate fair OHM price, for example, 3 strategies can be used to determine fair OHM price: Chainlink, Uniswap3, Bunni. Thus assume Chainlink returns $11.1 and Uniswap3 returns $11.05 for OHM price.
+4. The price strategy takes median strategy, this means manipulating Bunni price feeds does not take effect on final OHM price determination because the median price of ($9, $11.05, $11.1) is $11.05 which could be accepted as fair OHM price.
+5. Now, the attacker can intentionally make Uniswap 3 price feed reverting using re-entrancy.
+6. When this happens, the only available price feeds are Chainlink and Bunny which are $9 and $11.1. Median price strategy is applied to these feeds thus returning $10 as OHM price, which is affected and this could result in attacker can buy more OHM tokens than expected.
+
+[Thoughts]
+Price feeds can revert for any reason by accidents so it would actually make sense using try/catch to ignore reverted price feeds. However, price feeds being reverted because of re-entrancy check can not be considered as accidents because it's intentional and unusual behavior. So I think it's the right behavior to revert price calculation itself as a whole when any price feed is reverted by re-entrancy check.
+
+[Claims]
+@nevillehuang - You were mentioning that I can not make other feeds revert for other users but only for myself.
+Yes, that's right. An attacker will let some price feeds revert only for himself(and only within a single transaction, they should work fine in other transactions), and it is to manipulate final fair price of tokens regardless of whatever strategy is taken.
+
+**nevillehuang**
+
+@KupiaSecAdmin Can you provide a coded PoC for your above scenario? I really don't see how step 5 can occur, given price feeds are utilized in separate transactions? How would one users price feed reverting affect another?
+
+> 5. Now, the attacker can intentionally make Uniswap 3 price feed reverting using re-entrancy.
+
+
+**KupiaSecAdmin**
+
+@nevillehuang @0xJem  - Here's a PoC that shows how price can be manipulated. You can put this test file in same test directory with `PRICE.v2.t.sol`.
+https://gist.github.com/KupiaSecAdmin/fc7ef6664b191ab2b758a22ab15bf404
+
+Running test: `forge test --fork-url {{MAINNET_RPC}} --fork-block-number 19041673 --match-test testPriceManipulation -vv`
+
+Result:
+```bash
+[PASS] testPriceManipulation() (gas: 2299239)
+Logs:
+  Before: Chainklink/Olympus 6294108760000000000 6308514491323687440
+  After: Chainklink/Olympus 6294108760000000000 29508079057029841191
+
+Test result: ok. 1 passed; 0 failed; 0 skipped; finished in 4.69s
+ 
+Ran 1 test suites: 1 tests passed, 0 failed, 0 skipped (1 total tests)
+```
+
+[Scenario]
+1. It calculates UNI price using mainnet's forked data.
+2. It is assumed that Olympus uses UniV2 and UniV3 price feeds for calculating UNI price.
+3. The test manipulates UniV2 price and intentionally reverts UniV3 price feed, thus the final price is same as manipulated UniV2 price.
+
+[Focus]
+1. Even though test shows price manipulation is done via reserves, but reserve manipulation is not the only way of manipulating price, as Olympus integrates further more price feeds and based on protocols.
+2. The main point to show from the issue and PoC is that intentionally reverting some price feeds is dangerous because that can be a cause of price manipulation.
+
 **0xJem**
 
-The onus would be on the system operator(s) to ensure that prices are updated in a timely fashion using `storePrice`. The key asset prices, for OHM and DAI, are stored with every heartbeat (8 hours) in Heart.sol, so this is unlikely to be an issue.
+@Oighty can you weigh in on the risk of a third-party deliberately triggering the re-entrancy lock in the UniV3 pool?
+
+To me, this represents a misconfiguration of the asset price feeds. 
+
+If it was a single price feed (UniV3) only, it would be fine, as the price lookup would fail. 
+It's because there's a UniV2 pool in use that this *could* be susceptible to the price manipulation as you described. However, this feels unlikely because:
+- The depth of liquidity on the UNI / WETH UniV2 pool is $4.32m, which feels too low for a UniV3 pool (let alone UniV2!), and so we'd be unlikely to use it.
+- For an asset that does not have as much liquidity (e.g. we are following this approach for FXS), we track an internal MA and use that, which ensures that any manipulation is smoothed out.
+
+If we were to have UNI defined as an asset, we would be more likely to do this:
+- UNI/ETH Chainlink feed
+- UNI/wETH UniV3 pool with TWAP
+
+Given the difficulty of manipulation *both* sources, and the deep liquidity of the UniV3 pool ($31.65m), we'd be confident that it would be resilient enough.
+
+**nevillehuang**
+
+- UNI wasn't mentioned as an integrated token in the contest details, so wouldn't this be invalid?
+- Olympus also has many mitigations in place for TWAP manipulation
+
+**Czar102**
+
+I think this is a really nice finding if true, kudos for the thought process @KupiaSecAdmin!
+
+Since price manipulation itself is out of scope, but the expectation of using multiple price sources should make the price more difficult to manipulate, and because of the bug, the breakdown value falls drastically. Thus I believe it deserves to be a valid Medium.
+
+I'm not sure about the point above, @0xJem could you explain why would such setup be a misconfiguration? From my understanding, any setup using any of these 3 oracles and any other one will be susceptible to manipulation.
+
+**nevillehuang**
+
+@Czar102 Some questions:
+
+1. Is there anywhere it was indicated that the above uni pools would be used as price feeds? Given the watson made an assumption:
+
+> assumed that Olympus uses UniV2 and UniV3 price feeds for calculating UNI price.
+
+2. Isn't the additional data provided by the watson still related to manipulation of reserves and like you said out of scope? To me he still hasn't prove that there is any other cause other than manipulating reserves other than stating a possibility? Would be nice if he can prove this issues above scenario of 1 and 2 (reentrancy triggering affecting price feed of other users?)
+
+3. Dont Olympus use an internal MA to mitigate risk of reserve manipulation?
 
 **0xJem**
 
-We reconsidered this and feel that a check is safer, rather than relying upon the system operator
+> I'm not sure about the point above, @0xJem could you explain why would such setup be a misconfiguration? From my understanding, any setup using any of these 3 oracles and any other one will be susceptible to manipulation.
 
-# Issue M-7: getReservesByCategory() when useSubmodules =true and submoduleReservesSelector=bytes4(0) will revert 
+- Given the risk of a single price feed reverting (causing the 2nd price feed to be used), we would not use a UniV2 (which doesn't have re-entrancy protection and is much more susceptible to manipulation) pool as the second feed.
+- Instead of this UniV3 + UniV3 combination, if we were to configure in PRICE for this asset, we would do a Chainlink feed (e.g. UNI-USD, no idea if it exists) and a UniV3 pool.
+
+**Czar102**
+
+@nevillehuang I believe the assumption you are mentioning in point 1 is just an example and the different price feeds could be anything, like Uni v3 + Uni v3 – one could manipulate one of these and make the other revert, for example.
+
+Regarding point 2, I don't think the crux here is the manipulation of reserves, they may be just off with respect to each other. The point is that the attacker can selectively decide which sources of information to use, impacting the final price reading. The point of using multiple feeds is to make the price more reliable, and they are being made less reliable if you can make the readings be rejected.
+
+Regarding point 3, I believe you could repetitively make the price pass sanity checks, making it exponentially diverge from the real price.
+
+Regarding @0xJem's points: I believe simply not using a Uni v2 pool doesn't mitigate this. Using any of the dexes mentioned above together with any feed will have this impact. So, a Chainlink feed + Uni v3 pool could be exploited in a way that the Uni v3 reading will revert and only Chainlink feed will be used, which may benefit the attacker in a certain way.
+
+Has the approach for creating these safe setups been shared with Watsons anywhere? Am I misunderstanding something? @0xJem @nevillehuang @KupiaSecAdmin 
+
+**nevillehuang**
+
+@Czar102 
+
+- What is the cost of manipulating such price feeds, is it even profitable for the user?
+
+- The ORIGINAL issue certainly doesn't have [sufficient proof](https://docs.sherlock.xyz/audits/judging/judging#vi.-requirements) to prove that anything other than manipulation of reserves will cause price feed revert or show that it is viable/economically viable. Until the watson prove to me with a reasonable PoC that it is possible, I cannot verify validity, especially not with information from the original submission. If a judge has to do alot of additional research apart from what is provided in the issue, it certainly doesn’t help too.
+
+> 2. In case of non-obvious issues with complex vulnerabilities/attack paths, Watson must submit a valid POC for the issue to be considered valid and rewarded.
+
+- The watson is speculating on how protocol will configure and select different price feeds. Like @0xJem mentioned, this is protocol determined so the above mentioned possibilities are all possible assumptions. “Could be anything” is a weak argument and based off your previous statement [here](https://github.com/sherlock-audit/2023-11-convergence-judging/issues/122#issuecomment-1889571331) it doesn’t line up, given configurations of price feeds are not explicitly mentioned in docs
+
+
+TLDR, unless the watson or YOU provide sufficient proof (best with a PoC) that it is economically possible/profitable, I’m not convinced this is a valid issue since you are just simply stating possibility. Please only consider the original submission only and see if it has sufficient information in place during the time when Im judging this.
+
+**Hash01011122**
+
+IMO In my opinion, while the precise impact of the potential attack isn't crystal clear, the mentioned attack path, extending up to price manipulation, significantly expands the attack surface. This broader surface introduces multiple avenues for potential attacks that may not be immediately apparent. I find @nevillehuang's comment lacking in persuasiveness, on how this issue should be considered as invalid after watson submitted the PoC. With a clear attack impact, Watson's submission should be rated as High severity. Watson's failure to articulate how the identified issue could result in a loss of funds for the protocol is crucial. But the issue highlights numerous ways the core functionality of the contract could be exploited, making it a valid medium-severity concern. 
+
+**nevillehuang**
+
+@Hash01011122, stating the possibility of an issue and proving it are two separate things. Can you look at the details provided in the issue and tell me with at least 80% confidence rate that it is valid without additional research by the judge to prove its validity when its not the case? 
+
+For example, the watson is simply stating "user can cause reentrancy" with a single one liner type comment without any code description/POC (there are multiple instances throughout the issue)? How am I suppose to verify that? I am a firm believer that burden of proof is on the watson not the judge, and I believe sherlock also enforces this stance.
+
+The fact that Head of judging and sponsor has to come in and supplement the non-obvious finding of the watson certainly doesn't help too, and I believe this will be resolved in the future now that we have the `request poc` feature, but I believe as of contest date, the information provided in the ORIGINAL submission is insufficient to warrant its severity other than low/invalid.
+
+**Czar102**
+
+I understood the finding when I haven't read a half or it. I think the only thing that needs to be verified is that a revert in price reading will cause the price to be computed based on other sources.
+
+Selective manipulation of sources of information defeats the purpose of sourcing the data from many sources – instead of increasing security, the data will be pulled from potentially least safe sources.
+
+I think it warrants Medium severity.
+
+**nevillehuang**
+
+@Czar102 ok got it I put it on myself for not having the knowledge u possess to understand this issue. I will let you decide once you decide what @0xJem considers. Again understanding and proving to issue is two separate issues for debate.
+
+**Czar102**
+
+Result:
+Medium
+Unique
+
+**sherlock-admin2**
+
+Escalations have been resolved successfully!
+
+Escalation status:
+- [KupiaSecAdmin](https://github.com/sherlock-audit/2023-11-olympus-judging/issues/127/#issuecomment-1881721379): accepted
+
+# Issue M-5: getReservesByCategory() when useSubmodules =true and submoduleReservesSelector=bytes4(0) will revert 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/149 
 
@@ -1643,115 +1414,15 @@ Manual Review
 
 Good catch! Thank you for the clear explanation and test case, too.
 
-# Issue M-8: removeAsset() when locations.length>1  will revert 
+**0xrusowsky**
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/151 
+https://github.com/OlympusDAO/bophades/pull/262
 
-## Found by 
-Arabadzhiev, AuditorPraise, KupiaSec, bin2chen, dany.armstrong90, evilakela, ge6a, hash, jah, jasonxiale, jovi, pontifex, rvierdiiev, squeaky\_cactus, tvdung94, zach030
-## Summary
-In `removeAsset()`, the implementation of deleting `locations` is incorrect.
- If `locations.length > 1`, it will revert `out-of-bounds`.
+**IAm0x52**
 
-## Vulnerability Detail
-In `removeAsset()`, deleting `asset` will clear `locations`. The code is as follows:
-```solidity
-    function removeAsset(address asset_) external override permissioned {
-...
+Fix looks good, exactly as suggested
 
-        len = asset.locations.length;
-        for (uint256 i; i < len; ) {
-            asset.locations[i] = asset.locations[len - 1];
-            asset.locations.pop();
-            unchecked {
-                ++i;
-            }
-        }
-```
-The above code loops `pop()`, the size of the array will become smaller and smaller
-but it always uses `asset.locations[len - 1]`, which will cause `out-of-bounds`.
-
-## POC
-
-add to `TRSRY.v1_1.t.sol`
-
-```solidity
-    function testCorrectness_removeAsset_two_locations() public {
-        address[] memory locations = new address[](2);
-        locations[0] = address(1);
-        locations[1] = address(2);
-
-        // Add an asset
-        vm.prank(godmode);
-        TRSRY.addAsset(address(reserve), locations);
-
-        // Remove the asset
-        vm.prank(godmode);
-        TRSRY.removeAsset(address(reserve));
-
-        // Verify asset data
-        TRSRYv1_1.Asset memory asset = TRSRY.getAssetData(address(reserve));
-        assertEq(asset.approved, false);
-        assertEq(asset.lastBalance, 0);
-        assertEq(asset.locations.length, 0);
-
-        // Verify asset list
-        address[] memory assets = TRSRY.getAssets();
-        assertEq(assets.length, 0);
-    } 
-```
-
-```console
-forge test -vv --match-test testCorrectness_removeAsset_two_locations
-
-Running 1 test for src/test/modules/TRSRY.v1_1.t.sol:TRSRYv1_1Test
-[FAIL. Reason: panic: array out-of-bounds access (0x32)] testCorrectness_removeAsset_two_locations() (gas: 204563)
-```
-
-## Impact
-
-when `locations.length>1`  unable to properly delete `asset`.
-
-## Code Snippet
-
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/TRSRY/OlympusTreasury.sol#L470-L477
-
-## Tool used
-
-Manual Review
-
-## Recommendation
-
-```diff
-    function removeAsset(address asset_) external override permissioned {
-...
-
--        len = asset.locations.length;
--        for (uint256 i; i < len; ) {
--            asset.locations[i] = asset.locations[len - 1];
--            asset.locations.pop();
--            unchecked {
--                ++i;
--            }
--        }
-
-```
-
-
-
-## Discussion
-
-**0xJem**
-
-Technically correct.
-
-Low severity. The issue would not affect the treasury valuation (which is the purpose of all of this), and `removeAsset()` is a permissioned function called by a whitelisted admin (via the policy).
-
-**nevillehuang**
-
-Hi @0xJem, to me the watsons highlighted a valid point that can break core functionality of `removeAsset` as long as locations.length is greater than 1, which would constitute medium severity. I think it is intended that there will be more than one location for an asset, unless I am missing something. Open to hearing your opinion.
-
-# Issue M-9: Balancer LP valuation methodologies use the incorrect supply metric 
+# Issue M-6: Balancer LP valuation methodologies use the incorrect supply metric 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/155 
 
@@ -1816,202 +1487,7 @@ This is a valid issue and highlights problems with Balancer's documentation.
 
 We are likely to drop both the Balancer submodules from the final version, since we no longer have any Balancer pools used for POL and don't have any assets that require price resolution via Balancer pools.
 
-# Issue M-10: OlympusTreasury#removeCategoryGroup fails to properly clear the categorization which can lead to incorrect asset categorization 
-
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/158 
-
-## Found by 
-0x52, Arabadzhiev, Drynooo, dany.armstrong90, ggg\_ttt\_hhh, tvdung94
-## Summary
-
-The categorization mapping in OlympusTreasury is used to track which assets are associated with which category groups. When removing a categoryGroup, the categorization array is never properly cleared. This leaves a tangled and potentially hazardous mapping. In the even the category is added again, it could lead to incorrect valuation when deploying RBS.
-
-## Vulnerability Detail
-
-[OlympusTreasury.sol#L657-L667](https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/TRSRY/OlympusTreasury.sol#L657-L667)
-
-    function categorize(address asset_, Category category_) external override permissioned {
-        // Check that asset is initialized
-        if (!assetData[asset_].approved) revert TRSRY_InvalidParams(0, abi.encode(asset_));
-
-
-        // Check if the category exists by seeing if it has a non-zero category group
-        CategoryGroup group = categoryToGroup[category_];
-        if (fromCategoryGroup(group) == bytes32(0)) revert TRSRY_CategoryDoesNotExist(category_);
-
-
-        // Store category data for address
-        categorization[asset_][group] = category_;
-    }
-
-Above we see that when an asset is categorized, it is added to the categorization mapping. This mapping is essential for determining which assets are in which category.
-
-[OlympusTreasury.sol#L567-L583](https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/TRSRY/OlympusTreasury.sol#L567-L583)
-
-    function removeCategoryGroup(CategoryGroup group_) external override permissioned {
-        // Check if the category group exists
-        if (!_categoryGroupExists(group_)) revert TRSRY_CategoryGroupDoesNotExist(group_);
-
-
-        // Remove category group
-        uint256 len = categoryGroups.length;
-        for (uint256 i; i < len; ) {
-            if (fromCategoryGroup(categoryGroups[i]) == fromCategoryGroup(group_)) {
-                categoryGroups[i] = categoryGroups[len - 1];
-                categoryGroups.pop();
-                break;
-            }
-            unchecked {
-                ++i;
-            }
-        }
-
-Inside OlympusTreasury#removeCategoryGroup we can see that even though the categoryGroup is removed, the assets are never cleared from it. This can lead to issues down the line. As an example, if a the category is re-added at a later date, it may contain assets that are no longer supported or have since been re-categorized. This could lead to invalid protocol metrics that cause RBS (or other future modules) funds to be deployed incorrectly  
-
-## Impact
-
-Incorrect protocol metrics leading polices to function incorrectly
-
-## Code Snippet
-
-[OlympusTreasury.sol#L567-L583](https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/TRSRY/OlympusTreasury.sol#L567-L583)
-
-## Tool used
-
-Manual Review
-
-## Recommendation
-
-Clear the categorization of every asset associated with that categoryGroup
-
-
-
-## Discussion
-
-**0xJem**
-
-Low severity - does not put funds at risk.
-
-**nevillehuang**
-
-Hi @0xJem, I think the watson highlighted a valid scenario that could impact core functionality even though no funds are at loss.
-
->  As an example, if a the category is re-added at a later date, it may contain assets that are no longer supported or have since been re-categorized. This could lead to invalid protocol metrics that cause RBS (or other future modules) funds to be deployed incorrectly
-
-
-# Issue M-11: Possible outdated price for tokens in Balancer stable pools due to cached rate 
-
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/177 
-
-## Found by 
-hash
-## Summary
-While computing the token price from a balancer stable pool, cached rates may be used leading to incorrect prices.
-
-## Vulnerability Detail
-When computing the token price inside `getTokenPriceFromStablePool` the current scalingFactors are fetched from the Balancer pool in order to scale the token amounts by calling the `getScalingFactors` function
-```solidity
-    function getTokenPriceFromStablePool(
-        address lookupToken_,
-        uint8 outputDecimals_,
-        bytes calldata params_
-    ) external view returns (uint256) {
-
-        ......
-
-                try pool.getLastInvariant() returns (uint256, uint256 ampFactor) {
-                    // Upscale balances by the scaling factors
-                    uint256[] memory scalingFactors = pool.getScalingFactors();
-                    uint256 len = scalingFactors.length;
-                    for (uint256 i; i < len; ++i) {
-                        balances_[i] = FixedPoint.mulDown(balances_[i], scalingFactors[i]);
-                    }
-
-        .......
-```
-
-For stable pools with rate providers, the scaling factors also include the rate of the token which is provided by the rateProvider periodically.
-
-https://vscode.blockscan.com/ethereum/0x1e19cf2d73a72ef1332c882f20534b6519be0276
-```solidity
-    function _scalingFactors() internal view virtual override returns (uint256[] memory scalingFactors) {
-        
-        .....
-        
-        scalingFactors = super._scalingFactors();
-        scalingFactors[0] = scalingFactors[0].mulDown(_priceRate(_token0));
-        scalingFactors[1] = scalingFactors[1].mulDown(_priceRate(_token1));
-    }
-```
-
-If the time gap b/w two swaps in the pool is large, the scalingFactors can be using the older rate. In Balancer this is mitigated by checking for the cached duration before any swap is made
-
-https://vscode.blockscan.com/ethereum/0x1e19cf2d73a72ef1332c882f20534b6519be0276
-```solidity
-    function onSwap(
-        SwapRequest memory request,
-        uint256 balanceTokenIn,
-        uint256 balanceTokenOut
-    ) public virtual override onlyVault(request.poolId) returns (uint256) {
-        _cachePriceRatesIfNecessary();
-        return super.onSwap(request, balanceTokenIn, balanceTokenOut);
-    }
-```
-
-
-## Impact
-Incorrect calculation of token prices
-
-## Code Snippet
-using possible outdated token rates
-https://github.com/sherlock-audit/2023-11-olympus/blob/9c8df76dc9820b4c6605d2e1e6d87dcfa9e50070/bophades/src/modules/PRICE/submodules/feeds/BalancerPoolTokenPrice.sol#L811-L827
-
-## Tool used
-Manual Review
-
-## Recommendation
-To obtain the latest rates for metastable pools, check whether the current rates are expired by calling the `getPriceRateCache` function. If expired, call the `updatePriceRateCache()` function before fetching the scaling factors.
-
-https://vscode.blockscan.com/ethereum/0x1e19cf2d73a72ef1332c882f20534b6519be0276
-MetaStable.sol
-```solidity
-    function getPriceRateCache(IERC20 token)
-        external
-        view
-        returns (
-            uint256 rate,
-            uint256 duration,
-            uint256 expires
-        )
-    {
-        if (_isToken0(token)) return _getPriceRateCache(_getPriceRateCache0());
-        if (_isToken1(token)) return _getPriceRateCache(_getPriceRateCache1());
-        _revert(Errors.INVALID_TOKEN);
-    }
-```
-```solidity
-    function updatePriceRateCache(IERC20 token) external {
-        if (_isToken0WithRateProvider(token)) {
-            _updateToken0PriceRateCache();
-        } else if (_isToken1WithRateProvider(token)) {
-            _updateToken1PriceRateCache();
-        } else {
-            _revert(Errors.INVALID_TOKEN);
-        }
-    }
-```
-
-
-
-## Discussion
-
-**0xJem**
-
-This is a valid issue and highlights problems with Balancer's documentation.
-
-We are likely to drop both the Balancer submodules from the final version, since we no longer have any Balancer pools used for POL and don't have any assets that require price resolution via Balancer pools.
-
-# Issue M-12: Possible incorrect price for tokens in Balancer stable pool due to amplification parameter update 
+# Issue M-7: Possible incorrect price for tokens in Balancer stable pool due to amplification parameter update 
 
 Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/178 
 
@@ -2097,105 +1573,541 @@ The invariant used for calculating swap amounts in Balancer is always based on t
 i am attaching a poc if required:
 https://gist.github.com/10xhash/8e24d0765ee98def8c6409c71a7d2b17
 
-# Issue M-13: Inadequate Gas Limit in Staticcall while checking for balancer reentrancy would fail 
+**0xauditsea**
 
-Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/203 
+Escalate
+
+This looks like invalid. Logically thinking, using `getLastInvariant` is more precise because the goal of this price feed is to calculate spot price of the balancer pool. If current amplification factor is used, it doesn't represent current state of the pool.
+
+**sherlock-admin2**
+
+ > Escalate
+> 
+> This looks like invalid. Logically thinking, using `getLastInvariant` is more precise because the goal of this price feed is to calculate spot price of the balancer pool. If current amplification factor is used, it doesn't represent current state of the pool.
+
+You've created a valid escalation!
+
+To remove the escalation from consideration: Delete your comment.
+
+You may delete or edit your escalation comment anytime before the 48-hour escalation window closes. After that, the escalation becomes final.
+
+**Czar102**
+
+@nevillehuang what do you think?
+
+**nevillehuang**
+
+@Czar102 I don't quite understand what @0xauditsea is pointing to. If you want to calculate the latest spot price, shouldn't you use the latest factor as indicated by the PoC by @10xhash? 
+
+**Czar102**
+
+@0xauditsea could you explain your reasoning in more detail?
+
+**nevillehuang**
+
+@10xhash does this affect ALL pools intended to be integrated during the time of contest?
+
+**10xhash**
+
+It has to be clarified what `intended to be integrated pools` at the time of contest are:
+1. If only the list of tokens mentioned in the readme _can be _in a pool__ ( as mentioned in previous replies this is not required per the contest definition since all tokens are not required to interact with contracts ) : There are 0 stable pools including normal, metastable etc. The only possible stable pool of any type that can be used with the above restriction is the dai-sdai metastable pool which has to be deployed in future.
+2. Else it must atleast include normal stable pools and according to balancer's [documentation](https://docs.balancer.fi/reference/authorizer/mainnet.html#last-generated-on-2024-01-10) {search startAmplificationParameterUpdate} and testing done on the dai-usdc-usdt pool, it would be affected
+
+**Czar102**
+
+1. Metastable pools are not supposed to be supported.
+2. This documentation seems to be for Avalanche, while the contracts will be deployed on mainnet. I believe this functionality exists on mainnet too, right?
+
+Aside from that, the impact is that the price calculated is the price at the last pool update (trade) instead of the current price?
+
+**10xhash**
+
+2. The link opens up to Mainnet for me, if not you would have the option to select the chain on leftside. Yes.  
+
+The impact would be that the amplification parameter used in the price calculation will be that of the last join action (addliquidity , removeliquidity) which will be different from the actual one used in the pool calculations. This will result in an incorrect price until some user performs a join operation.  
+
+**Czar102**
+
+Adding/removing liquidity doesn't necessarily happen often. This, together with the amplification parameter change, is a very unlikely situation, nevertheless a possible one.
+
+It's a borderline Med/Low, but I am inclined to keep this one a valid Medium. I don't understand the point made in the escalation, and @0xauditsea hasn't elaborated when asked for additional information.
+
+**gstoyanovbg**
+
+In determining the impact of this report, in my opinion, it should be assessed how much the price can change in the described circumstances and whether the change is significant. I conducted a foundry test that shows the change in the price of AURA_BAL at different values of the amplification factor. The test should be added to BalancerPoolTokenPriceStable.t.sol.
+
+```solidity
+function test_amp_factor_impact() public {
+        bytes memory params = encodeBalancerPoolParams(mockStablePool);
+        uint256 price;
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR + 2000);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 + 2000", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR + 10000);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 + 10000", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR * 2);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 * 2", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR * 4);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 * 4", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR * 10);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 * 10", price);
+
+        mockStablePool.setLastInvariant(INVARIANT, AMP_FACTOR * 100);
+        price = balancerSubmodule.getTokenPriceFromStablePool(
+            AURA_BAL,
+            PRICE_DECIMALS,
+            params
+        );
+        console.log("%d, AMP_FACTOR = 50000 * 100", price);
+    }
+```
+>  16602528871962134544, AMP_FACTOR = 50000
+  16606565178508667081, AMP_FACTOR = 50000 + 2000
+  16620074517406602667, AMP_FACTOR = 50000 + 10000
+  16655599693391809126, AMP_FACTOR = 50000 * 2
+  16682630482761745824, AMP_FACTOR = 50000 * 4
+  16699011129392628938, AMP_FACTOR = 50000 * 10
+  16708898633935285195, AMP_FACTOR = 50000 * 100
+
+From the obtained results, it can be seen that the change in price is small. Even if we increase it 100 times to the maximum possible value of 5000 * 10^3, the change in price is around 0.1 (0.63%). For such a large increase of the amplification factor, it would take about 7 days (2x per day). Another question is what is the chance that there will be no join or exit within these 7 days.
+
+@Czar102 I don't know if this is significant enough change in the price for Sherlock, but wanted to share it to be sure it will be taken into consideration.
+
+
+**Czar102**
+
+@gstoyanovbg Thank you for the test, it looks like this should be a low severity issue.
+
+@10xhash Can you provide a scenario where the price would be altered by more than 5%?
+
+**10xhash**
+
+Place the test inside test/ and run `forge test --mt testHash_AmplificationDiff5`
+It is asserted that the diff in price is > 5% when the current amplification parameter is divided by 6 with a 4 day period. Dividing by 6 would make the pool close to 8000 (currently 50000). 
+ 
+```solidity
+pragma solidity 0.8.15;
+
+import "forge-std/Test.sol";
+import {IStablePool} from "src/libraries/Balancer/interfaces/IStablePool.sol";
+import {IVault} from "src/libraries/Balancer/interfaces/IVault.sol";
+import {FullMath} from "src/libraries/FullMath.sol";
+import {StableMath} from "src/libraries/Balancer/math/StableMath.sol";
+import {IVault} from "src/libraries/Balancer/interfaces/IVault.sol";
+import {IBasePool} from "src/libraries/Balancer/interfaces/IBasePool.sol";
+import {IWeightedPool} from "src/libraries/Balancer/interfaces/IWeightedPool.sol";
+import {IStablePool} from "src/libraries/Balancer/interfaces/IStablePool.sol";
+import {VaultReentrancyLib} from "src/libraries/Balancer/contracts/VaultReentrancyLib.sol";
+import {LogExpMath} from "src/libraries/Balancer/math/LogExpMath.sol";
+import {FixedPoint} from "src/libraries/Balancer/math/FixedPoint.sol";
+
+interface IStablePoolWithAmp is IStablePool {
+    function getAmplificationParameter()
+        external
+        view
+        returns (uint amp, bool isUpdating, uint precision);
+
+        
+
+        function startAmplificationParameterUpdate(uint256 rawEndValue, uint256 endTime) external;
+}
+
+interface IERC20 {
+    function approve(address spender,uint amount) external;
+} 
+
+enum SwapKind { GIVEN_IN, GIVEN_OUT }
+
+
+struct SingleSwap {
+        bytes32 poolId;
+        SwapKind kind;
+        address assetIn;
+        address assetOut;
+        uint256 amount;
+        bytes userData;
+    }
+
+        struct FundManagement {
+        address sender;
+        bool fromInternalBalance;
+        address payable recipient;
+        bool toInternalBalance;
+    }
+
+interface VaultWithSwap is IVault{
+    function swap(
+        SingleSwap memory singleSwap,
+        FundManagement memory funds,
+        uint256 limit,
+        uint256 deadline
+    ) external payable returns (uint256);
+}
+
+contract PriceTest is Test {
+    using FullMath for uint256;
+
+    function testHash_AmplificationDiff5() public {
+        VaultWithSwap balVault = VaultWithSwap(0xBA12222222228d8Ba445958a75a0704d566BF2C8);
+        IStablePoolWithAmp pool = IStablePoolWithAmp(0x3dd0843A028C86e0b760b1A76929d1C5Ef93a2dd);
+        
+        (, uint cachedAmpFactor) = pool.getLastInvariant();
+        {
+            (, bool isUpdating, ) = pool.getAmplificationParameter();
+             assert(isUpdating == false);
+        }
+
+        console.log("cahced factor",cachedAmpFactor);
+
+        {
+        address mainnetFeeSetter = 0xf4A80929163C5179Ca042E1B292F5EFBBE3D89e6;
+        
+        vm.startPrank(mainnetFeeSetter);
+        pool.startAmplificationParameterUpdate(cachedAmpFactor / 6 / 1e3, block.timestamp + 4 days);
+
+        vm.warp(block.timestamp + 4 days + 100);
+
+        // perform swaps to update the balances with latest amp factor
+        {
+            (uint amp,bool isUpdating , ) = pool.getAmplificationParameter();
+            assert(isUpdating == false);
+        }
+
+        console.log("amp params set");
+        }
+
+        uint[] memory balances_;
+        uint actualAmpFactor;
+{
+bytes32 poolId = pool.getPoolId();
+        (actualAmpFactor, , ) = pool.getAmplificationParameter();
+
+        (,  balances_, ) = balVault.getPoolTokens(poolId);
+        uint256[] memory scalingFactors = pool.getScalingFactors();
+        {
+            
+            uint256 len = scalingFactors.length;
+            for (uint256 i; i < len; ++i) {
+                balances_[i] = FixedPoint.mulDown(balances_[i], scalingFactors[i]);
+            }
+        }
+}
+        
+
+        // lookup token auraBal and destination token lp token
+        
+        uint oldCachedPrice;
+        uint newAmpFactorPrice;
+        {
+            uint destinationTokenIndex = 0;
+        uint lookupTokenIndex = 1;
+            console.log("calculation with previous amp factor");
+            uint lookupTokensPerDestinationToken;
+            lookupTokensPerDestinationToken = StableMath._calcOutGivenIn(
+                cachedAmpFactor,
+                balances_,
+                destinationTokenIndex,
+                lookupTokenIndex,
+                1e18,
+                StableMath._calculateInvariant(cachedAmpFactor, balances_)
+            );
+
+            // Downscale the amount to token decimals
+        uint256[] memory scalingFactors = pool.getScalingFactors();
+            lookupTokensPerDestinationToken = FixedPoint.divDown(
+                lookupTokensPerDestinationToken,
+                scalingFactors[lookupTokenIndex]
+            );
+
+            uint outputDecimals = 8;
+
+            lookupTokensPerDestinationToken =
+                (lookupTokensPerDestinationToken * 10 ** outputDecimals) /
+                1e18;
+
+            uint destinationTokenPrice =  1127000000;
+            console.log("bal lp price", destinationTokenPrice);
+            uint lookupTokenPrice;
+
+            lookupTokenPrice = destinationTokenPrice.mulDiv(
+                10 ** outputDecimals,
+                lookupTokensPerDestinationToken
+            );
+            oldCachedPrice = lookupTokenPrice;
+            console.log("aurabal price", lookupTokenPrice);
+        }
+
+        {
+            uint destinationTokenIndex = 0;
+        uint lookupTokenIndex = 1;
+            console.log("calculation with updated amp factor");
+            uint lookupTokensPerDestinationToken;
+            lookupTokensPerDestinationToken = StableMath._calcOutGivenIn(
+                actualAmpFactor,
+                balances_,
+                destinationTokenIndex,
+                lookupTokenIndex,
+                1e18,
+                StableMath._calculateInvariant(actualAmpFactor, balances_)
+            );
+
+            // Downscale the amount to token decimals
+        uint256[] memory scalingFactors = pool.getScalingFactors();
+            lookupTokensPerDestinationToken = FixedPoint.divDown(
+                lookupTokensPerDestinationToken,
+                scalingFactors[lookupTokenIndex]
+            );
+
+            uint outputDecimals = 8;
+
+            lookupTokensPerDestinationToken =
+                (lookupTokensPerDestinationToken * 10 ** outputDecimals) /
+                1e18;
+
+            uint destinationTokenPrice = 1127000000;
+            console.log("bal lp price", destinationTokenPrice);
+            uint lookupTokenPrice;
+
+            lookupTokenPrice = destinationTokenPrice.mulDiv(
+                10 ** outputDecimals,
+                lookupTokensPerDestinationToken
+            );
+            newAmpFactorPrice = lookupTokenPrice;
+            console.log("aurabal price", lookupTokenPrice);
+        }
+
+        assert((oldCachedPrice -newAmpFactorPrice) * 100 * 1e18 / newAmpFactorPrice > 5 ether);
+      
+    }
+    
+}
+```
+
+**gstoyanovbg**
+
+@10xhash well done, i think your test is valid and shows a significant price change.
+
+**Czar102**
+
+Thank you @10xhash! Planning to leave the issue as is.
+
+**Czar102**
+
+Result:
+Medium
+Unique
+
+
+**sherlock-admin2**
+
+Escalations have been resolved successfully!
+
+Escalation status:
+- [0xauditsea](https://github.com/sherlock-audit/2023-11-olympus-judging/issues/178/#issuecomment-1881788707): rejected
+
+# Issue M-8: Incorrect deviation calculation in isDeviatingWithBpsCheck function 
+
+Source: https://github.com/sherlock-audit/2023-11-olympus-judging/issues/193 
 
 ## Found by 
-0xMR0
+ast3ros, coffiasd, dany.armstrong90, evilakela, hash
 ## Summary
-Inadequate Gas Limit in Staticcall while checking for balancer reentrancy would fail
+
+The current implementation of the `isDeviatingWithBpsCheck` function in the codebase leads to inaccurate deviation calculations, potentially allowing deviations beyond the specified limits.
 
 ## Vulnerability Detail
 
-`VaultReentrancyLib.ensureNotInVaultContext()` is used to check if the balancer contract has been re-entered or not. It does this by doing a `staticcall` on the pool contract and checking the return value. 
-According to the solidity docs, if a staticcall encounters a state change, it burns up all gas and returns. The checkReentrancy tries to call `manageUserBalance` on the vault contract, and returns if it finds a state change.
+The function `isDeviatingWithBpsCheck` checks if the deviation between two values exceeds a defined threshold. This function incorrectly calculates the deviation, considering only the deviation from the larger value to the smaller one, instead of the deviation from the mean (or TWAP).
 
-`ensureNotInVaultContext()` is given as below,
+        function isDeviatingWithBpsCheck(
+            uint256 value0_,
+            uint256 value1_,
+            uint256 deviationBps_,
+            uint256 deviationMax_
+        ) internal pure returns (bool) {
+            if (deviationBps_ > deviationMax_)
+                revert Deviation_InvalidDeviationBps(deviationBps_, deviationMax_);
 
-```solidity
+            return isDeviating(value0_, value1_, deviationBps_, deviationMax_);
+        }
 
-    function ensureNotInVaultContext(IVault vault) internal view {
+        function isDeviating(
+            uint256 value0_,
+            uint256 value1_,
+            uint256 deviationBps_,
+            uint256 deviationMax_
+        ) internal pure returns (bool) {
+            return
+                (value0_ < value1_)
+                    ? _isDeviating(value1_, value0_, deviationBps_, deviationMax_)
+                    : _isDeviating(value0_, value1_, deviationBps_, deviationMax_);
+        }
 
-         . . . some comments
+https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L23-L52
 
-        // Reduced to 1k gas to avoid large gas cost predictions when using this function in a non-view function
->>      (, bytes memory revertData) = address(vault).staticcall{gas: 1_000}(
-            abi.encodeWithSelector(vault.manageUserBalance.selector, 0)
-        );
+The function then call `_isDeviating` to calculate how much the smaller value is deviated from the bigger value.
 
-        _require(revertData.length == 0, Errors.REENTRANCY);
-    }
-```
+        function _isDeviating(
+            uint256 value0_,
+            uint256 value1_,
+            uint256 deviationBps_,
+            uint256 deviationMax_
+        ) internal pure returns (bool) {
+            return ((value0_ - value1_) * deviationMax_) / value0_ > deviationBps_;
+        }
 
-The gas limit for the static call is set to 1_000, which is insufficient for the target function i.e `vault.manageUserBalance()` to execute successfully if it consumes more gas than the specified limit.
+https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L63-L70
 
-Balancer `VaultReentrancyLib.sol` has provided a gas limit of 10_000 for staticcall so that the function would not fail. This can be checked [here](https://github.com/balancer/balancer-v2-monorepo/blob/227683919a7031615c0bc7f144666cdf3883d212/pkg/pool-utils/contracts/lib/VaultReentrancyLib.sol#L78)
+The function `isDeviatingWithBpsCheck` is usually used to check how much the current value is deviated from the TWAP value to make sure that the value is not manipulated. Such as spot price and twap price in UniswapV3.
 
-```solidity
+        if (
+            // `isDeviatingWithBpsCheck()` will revert if `deviationBps` is invalid.
+            Deviation.isDeviatingWithBpsCheck(
+                baseInQuotePrice,
+                baseInQuoteTWAP,
+                params.maxDeviationBps,
+                DEVIATION_BASE
+            )
+        ) {
+            revert UniswapV3_PriceMismatch(address(params.pool), baseInQuoteTWAP, baseInQuotePrice);
+        }
 
-    function ensureNotInVaultContext(IVault vault) internal view {
-        . . . some comments
+https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/modules/PRICE/submodules/feeds/UniswapV3Price.sol#L225-L235
 
->>        (, bytes memory revertData) = address(vault).staticcall{ gas: 10_000 }(
-            abi.encodeWithSelector(vault.manageUserBalance.selector, 0)
-        );
+The issue is isDeviatingWithBpsCheck is not check the deviation of current value to the TWAP but deviation from the bigger value to the smaller value. This leads to an incorrect allowance range for the price, permitting deviations that exceed the acceptable threshold.
 
-        _require(revertData.length == 0, Errors.REENTRANCY);
-    }
-```
+Example:
 
-For successfully working of staticcall, a 10_000 gas limit is enough. 
+TWAP price: 1000
+Allow deviation: 10%.
 
-Referencing [this](https://github.com/wolflo/evm-opcodes/blob/main/gas.md#aa-call-operations) documentation, 
+The correct deviation calculation will use deviation from the mean. The allow price will be from 900 to 1100 since:
 
-staticcall gas is calculated as,
+-   |1100 - 1000| / 1000 = 10%
+-   |900 - 1000| / 1000 = 10%
 
-> AA-4: STATICCALL
-Gas Calculation:
-base_gas = access_cost + mem_expansion_cost
-Calculate the gas_sent_with_call [below](https://github.com/wolflo/evm-opcodes/blob/main/gas.md#aa-f-gas-to-send-with-call-operations).
+However the current calculation will allow the price from 900 to 1111
 
-> And the final cost of the operation:
-gas_cost = base_gas + gas_sent_with_call
+-   (1111 - 1000) / 1111 = 10%
+-   (1000 - 900) / 1000 = 10%
 
-
-> EIP-150 increased the base_cost of the CALL opcode from 40 to 700 gas, but most contracts in use at the time were sending available_gas - 40 with every call. So, when base_cost increased, these contracts were suddenly trying to send more gas than they had left (requested_gas > remaining_gas). To avoid breaking these contracts, if the requested_gas is more than remaining_gas, we send all_but_one_64th of remaining_gas instead of trying to send requested_gas, which would result in an OUT_OF_GAS_ERROR
-
-Therefore, the base cost is itself is 700 gas + access cost(for not touched address will be 2600, Refer [this](https://github.com/wolflo/evm-opcodes/blob/main/gas.md#aa-call-operations) for better understanding) so the `ensureNotInVaultContext()` wont function properly due to insufficient gas. 
-
-The contracts using `ensureNotInVaultContext()` are `BalancerPoolTokenPrice.getWeightedPoolTokenPrice()`, `BalancerPoolTokenPrice.getStablePoolTokenPrice()`,  `BalancerPoolTokenPrice.getTokenPriceFromWeightedPool()`, `BalancerPoolTokenPrice.getTokenPriceFromStablePool()`, `AuraBalancerSupply.getProtocolOwnedLiquidityOhm()`, `AuraBalancerSupply.getProtocolOwnedLiquidityReserves()` and reentrancy check wont function properly in these functions.
+Even though the actual deviation of 1111 to 1000 is |1111 - 1000| / 1000 = 11.11% > 10%
 
 ## Impact
 
-the gas limit is too low for staticcall, the static call will fail, leading to unexpected behavior or errors while executing `ensureNotInVaultContext()` in above listed functions.
+This miscalculation allows for greater deviations than intended, increasing the vulnerability to price manipulation and inaccuracies in Oracle price reporting.
 
 ## Code Snippet
-https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Balancer/contracts/VaultReentrancyLib.sol#L77
 
+https://github.com/sherlock-audit/2023-11-olympus/blob/main/bophades/src/libraries/Deviation.sol#L63-L70
 
 ## Tool used
-Manual Review
+
+Manual review
 
 ## Recommendation
-According to the Balancer monorepo [here](https://github.com/balancer/balancer-v2-monorepo/blob/227683919a7031615c0bc7f144666cdf3883d212/pkg/pool-utils/contracts/lib/VaultReentrancyLib.sol#L78), the staticall must be allocated a 10_000 amount of gas. 
 
-Change the reentrancy check to the following.
+To accurately measure deviation, the isDeviating function should be revised to calculate the deviation based on the mean value: `| spot value - twap value | / twap value`.
 
-```diff
 
-    function ensureNotInVaultContext(IVault vault) internal view {
 
-         . . . some comments
+## Discussion
 
--        // Reduced to 1k gas to avoid large gas cost predictions when using this function in a non-view function
-+        // We set the gas limit to 10k for the staticcall to avoid wasting gas when it reverts due to storage modification
--      (, bytes memory revertData) = address(vault).staticcall{gas: 1_000}(
-+      (, bytes memory revertData) = address(vault).staticcall{gas: 10_000}(
-            abi.encodeWithSelector(vault.manageUserBalance.selector, 0)
-        );
+**0xrusowsky**
 
-        _require(revertData.length == 0, Errors.REENTRANCY);
-    }
-```
+https://github.com/OlympusDAO/bophades/pull/245
+
+**IAm0x52**
+
+Escalate
+
+This is purely a design choice. Nothing here is wrong with the implementation. The deviation is purely subjective and is measured objectively the same in both directions. This should be a low severity issue in my opinion and I strongly believe it should be. At the maximum this should be a medium severity issues as impact is not large at all for any reasonable variation and only subjectively incorrect
+
+**sherlock-admin2**
+
+ > Escalate
+> 
+> This is purely a design choice. Nothing here is wrong with the implementation. The deviation is purely subjective and is measured objectively the same in both directions. This should be a low severity issue in my opinion and I strongly believe it should be. At the maximum this should be a medium severity issues as impact is not large at all for any reasonable variation and only subjectively incorrect
+
+You've created a valid escalation!
+
+To remove the escalation from consideration: Delete your comment.
+
+You may delete or edit your escalation comment anytime before the 48-hour escalation window closes. After that, the escalation becomes final.
+
+**nevillehuang**
+
+@IAm0x52 I'm pretty sure sponsor acknowledging this with a fix indicates this is not a design choice. Let me know if there are any publicly available information at time of contests that points to that that I am missing.
+
+Since price values are CORE components of price modules, I labelled it as high as the returned price should never be allowed to have too significant of a deviation if not every use case of this prices will be impacted. I think #3 highlights the possible impact of this issues well, and as such this issues should have a minimum of medium severity if not high.
+
+**IAm0x52**
+
+This is only used in the BUNNI library which is full range liquidity. This simply used to ensure that reserves have not been manipulated and is not the price being used. Using the example provided at a 10% deviation. Reserves can be ~1% different between methodologies. 
+
+Let's do a small bit of math to figure this. Assume current invariant is 10000 and there should be 100 of each token (100 * 100 = 10000). If each token is worth $1 then the true value of the pool is 200 (1 * 100 + 1 * 100) Assume price has been manipulated up 10% so now the pool has 110 and 90.9 (10000 / 110) so the value of the pool is now 200.9 (110 * 1 + 90.9 * 1). Lets move it 1.111% more to 11.111% this means there is 111.1111 and 90 (10000 / 111.111) so the value of the pool is now 201.111 (111.111 * 1 + 90 * 1). This results in a difference of 0.211 on a value of 200.9 or 0.1%. This is entirely negligible and hence why I say the deviation check order is a design choice and either way is negligible.
+
+**nevillehuang**
+
+@IAm0x52 Agree with your analysis, but on context that core contract functionality of deviation check is broken, suggest to keep medium severity.
+
+**IAm0x52**
+
+Fix looks good. Benchmark is now always the middle for comparison
+
+**Czar102**
+
+I agree that calculating deviation in log is a valid design choice. Nevertheless, I think it was clear from the comments in code that the deviation was supposed to be calculated symmetrically and linearly, I acknowledge the limitations of this bug as well.
+
+Hence, planning to consider this a medium severity issue.
+
+**Czar102**
+
+Result:
+Medium
+Has duplicates
+
+**sherlock-admin2**
+
+Escalations have been resolved successfully!
+
+Escalation status:
+- [IAm0x52](https://github.com/sherlock-audit/2023-11-olympus-judging/issues/193/#issuecomment-1885019022): accepted
 
